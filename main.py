@@ -1,0 +1,229 @@
+from flask import Flask, request, jsonify, send_from_directory
+import os, requests, uuid, subprocess
+import mimetypes
+from openai import OpenAI
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+app = Flask(__name__)
+os.makedirs("temp", exist_ok=True)
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
+@app.route("/")
+def index():
+    return jsonify({"message": "FFmpeg + Whisper API is live!"})
+
+def download_video(url, out_path):
+    r = requests.get(url, stream=True)
+    with open(out_path, 'wb') as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+def transcribe_audio(audio_path):
+    with open(audio_path, "rb") as f:
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f,
+            response_format="text"
+        )
+    return response
+
+    
+def get_broll_timestamp(transcript_text):
+    prompt = f"""
+You are helping edit a video. Based on the transcript below, suggest one time (in seconds, less than 30) where a B-roll clip could be inserted to improve the viewer's experience.
+
+Transcript:
+\"\"\"{transcript_text}\"\"\"
+
+Reply with just the number of seconds (an integer, less than 30).
+"""
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5
+    )
+    content = response.choices[0].message.content.strip()
+    try:
+        return int(content)
+    except:
+        return 5  # fallback if GPT gets creative
+
+@app.route("/auto-splice", methods=["POST"])
+def auto_splice():
+    data = request.get_json()
+    main_url = data.get("main_video_url")
+    brolls = data.get("broll_clips", [])
+    broll = brolls[0]
+
+    video_id = str(uuid.uuid4())
+    main_path = f"temp/{video_id}_main.mp4"
+    broll_path = f"temp/{video_id}_broll.mp4"
+    output_path = f"temp/{video_id}_output.mp4"
+    pre_path = f"temp/{video_id}_pre.mp4"
+    post_path = f"temp/{video_id}_post.mp4"
+    list_path = f"temp/{video_id}_list.txt"
+
+    # Step 1: Download the main video and B-roll
+    download_video(main_url, main_path)
+    download_video(broll["url"], broll_path)
+
+    # ✅ Step 2: Normalize both videos to ensure matching codecs/resolution
+    norm_main = f"temp/{video_id}_main_norm.mp4"
+    norm_broll = f"temp/{video_id}_broll_norm.mp4"
+
+    subprocess.run(f"ffmpeg -y -i {main_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac -strict experimental {norm_main}", shell=True)
+    subprocess.run(f"ffmpeg -y -i {broll_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac -strict experimental {norm_broll}", shell=True)
+
+    # Step 3: Extract audio from normalized main video
+    audio_path = f"temp/{video_id}_audio.mp3"
+    subprocess.run(f"ffmpeg -y -i {norm_main} -vn -acodec libmp3lame -ar 44100 -ac 2 -b:a 128k {audio_path}", shell=True)
+
+    # Step 4: Transcribe the audio
+    transcript = transcribe_audio(audio_path)
+
+    # Step 5: Use GPT to pick splice time
+    splice_time = get_broll_timestamp(transcript)
+
+    # ✅ Step 6: Split normalized main video
+    subprocess.run(f"ffmpeg -y -i {norm_main} -t {splice_time} -c copy {pre_path}", shell=True)
+    subprocess.run(f"ffmpeg -y -i {norm_main} -ss {splice_time} -c copy {post_path}", shell=True)
+
+    # Step 7: Create concat list with normalized clips
+    with open(list_path, "w") as f:
+        f.write(f"file '{os.path.basename(pre_path)}'\n")
+        f.write(f"file '{os.path.basename(norm_broll)}'\n")
+        f.write(f"file '{os.path.basename(post_path)}'\n")
+
+    # ✅ Step 8: Concatenate everything into the final video
+    subprocess.run(
+        f"ffmpeg -y -f concat -safe 0 -i {list_path} -c:v libx264 -c:a aac {output_path}",
+        shell=True
+    )
+
+    # Optional: trim final output to 30s for faster testing
+    import time
+    time.sleep(2)
+
+    trimmed_path = f"temp/trimmed_{video_id}.mp4"
+    if os.path.exists(output_path):
+        subprocess.run(
+            f"ffmpeg -y -i {output_path} -t 30 -c copy {trimmed_path}",
+            shell=True
+        )
+        output_path = trimmed_path
+
+    return jsonify({
+        "status": "complete",
+        "timestamp_used": splice_time,
+        "transcript": transcript,
+        "output": f"/{output_path}"
+    })
+
+@app.route('/temp/<path:filename>')
+def download_file(filename):
+    return send_from_directory('temp', filename)
+    
+@app.route("/overlay-broll", methods=["POST"])
+def overlay_broll():
+    data = request.get_json()
+    main_url = data.get("main_video_url")
+    broll_url = data.get("broll_clips", [])[0]["url"]
+
+    video_id = str(uuid.uuid4())
+    main_path = f"temp/{video_id}_main.mp4"
+    broll_path = f"temp/{video_id}_broll.mp4"
+    norm_main = f"temp/{video_id}_main_norm.mp4"
+    norm_broll = f"temp/{video_id}_broll_norm.mp4"
+    trimmed_broll = f"temp/{video_id}_broll_trimmed.mp4"
+    audio_path = f"temp/{video_id}_audio.mp3"
+    output_path = f"temp/{video_id}_overlay_output.mp4"
+
+    # Step 1: Download videos
+    download_video(main_url, main_path)
+    download_video(broll_url, broll_path)
+
+    # Step 2: Normalize both videos
+    subprocess.run(f"ffmpeg -y -i {main_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_main}", shell=True)
+    subprocess.run(f"ffmpeg -y -i {broll_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_broll}", shell=True)
+
+    # Step 3: Extract audio for transcription
+    subprocess.run(f"ffmpeg -y -i {norm_main} -vn -acodec libmp3lame {audio_path}", shell=True)
+
+    # Step 4: Transcribe + get GPT timestamp (safely clamped < 30)
+    transcript = transcribe_audio(audio_path)
+    timestamp = 5
+    if timestamp > 30:
+        timestamp = 5  # fallback to safe value
+    broll_duration = 5
+
+    # Step 5: Trim B-roll and re-encode with clean timestamps
+    subprocess.run(
+        f"ffmpeg -y -i {norm_broll} -t {broll_duration} -vf scale=1280:720,setpts=PTS-STARTPTS -r 30 -c:v libx264 -preset ultrafast {trimmed_broll}",
+        shell=True
+    )
+
+    # Step 6: Overlay B-roll visually with main audio uninterrupted
+    overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + broll_duration})':eof_action=pass"
+    subprocess.run(
+        f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -c:v libx264 -c:a aac {output_path}",
+        shell=True
+    )
+
+    return jsonify({
+        "status": "overlay complete",
+        "timestamp_used": timestamp,
+        "broll_duration": broll_duration,
+        "output": f"/{output_path}"
+    })
+@app.route("/overlay-demo", methods=["POST"])
+def overlay_demo():
+    video_id = str(uuid.uuid4())
+
+    # URLs for demo
+    main_url = "https://drive.google.com/uc?export=download&id=196U7pFdsDoq8F5emI5IaqWH0GZVPmzKc"
+    broll_url = "https://drive.google.com/uc?export=download&id=1Y-drF_mO9vtrKtxVkz-JLXOp6A3LL8sU"
+
+    # Paths
+    main_path = f"temp/{video_id}_main.mp4"
+    broll_path = f"temp/{video_id}_broll.mp4"
+    norm_main = f"temp/{video_id}_main_norm.mp4"
+    norm_broll = f"temp/{video_id}_broll_norm.mp4"
+    trimmed_broll = f"temp/{video_id}_broll_trimmed.mp4"
+    output_path = f"temp/{video_id}_overlay_output.mp4"
+
+    # Download
+    download_video(main_url, main_path)
+    download_video(broll_url, broll_path)
+
+    # Normalize
+    subprocess.run(f"ffmpeg -y -i {main_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_main}", shell=True)
+    subprocess.run(f"ffmpeg -y -i {broll_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_broll}", shell=True)
+
+    # Trim & reset B-roll timestamps
+    subprocess.run(
+        f"ffmpeg -y -i {norm_broll} -t 5 -vf scale=1280:720,setpts=PTS-STARTPTS -r 30 -c:v libx264 {trimmed_broll}",
+        shell=True
+    )
+
+    # Overlay B-roll from 5s to 10s
+    subprocess.run(
+        f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"[0:v][1:v] overlay=enable='between(t,5,10)':eof_action=pass\" -map 0:a -c:v libx264 -c:a aac {output_path}",
+        shell=True
+    )
+
+    return jsonify({
+        "status": "demo complete",
+        "output": f"/{output_path}"
+    })
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+>>>>>>> 39ae634 (Ensure app is defined for gunicorn)

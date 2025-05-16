@@ -3,5 +3,5 @@ services:
   name: coh-video-backend
   env: python
   buildCommand: "pip install -r requirements.txt"
-  startCommand: "gunicorn main:app"
+  startCommand: "gunicorn main:app --timeout 120"
   plan: free

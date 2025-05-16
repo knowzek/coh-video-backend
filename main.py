@@ -238,6 +238,9 @@ def process_chunk():
     subprocess.run(
         f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -c:v libx264 -c:a aac {output_path}",
         shell=True
+
+    print(f"[DEBUG] Overlay complete: B-roll inserted at {timestamp}s")
+
     )
 
     return jsonify({

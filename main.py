@@ -150,9 +150,9 @@ def overlay_broll():
     download_video(main_url, main_path)
     download_video(broll_url, broll_path)
 
-    # Step 2: Normalize both videos
-    subprocess.run(f"ffmpeg -y -i {main_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_main}", shell=True)
-    subprocess.run(f"ffmpeg -y -i {broll_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_broll}", shell=True)
+    # Step 2: Normalize both videos (lower resolution and FPS to reduce memory)
+    subprocess.run(f"ffmpeg -y -i {main_path} -vf scale=640:360 -r 24 -c:v libx264 -c:a aac {norm_main}", shell=True)
+
 
     # Step 3: Extract audio for transcription
     subprocess.run(f"ffmpeg -y -i {norm_main} -vn -acodec libmp3lame {audio_path}", shell=True)
@@ -164,11 +164,12 @@ def overlay_broll():
         timestamp = 5  # fallback to safe value
     broll_duration = 5
 
-    # Step 5: Trim B-roll and re-encode with clean timestamps
+    # Step 5: Trim and normalize B-roll in one pass
     subprocess.run(
-        f"ffmpeg -y -i {norm_broll} -t {broll_duration} -vf scale=1280:720,setpts=PTS-STARTPTS -r 30 -c:v libx264 -preset ultrafast {trimmed_broll}",
+        f"ffmpeg -y -i {broll_path} -t {broll_duration} -vf scale=640:360,setpts=PTS-STARTPTS -r 24 -c:v libx264 -preset veryfast {trimmed_broll}",
         shell=True
     )
+
 
     # Step 6: Overlay B-roll visually with main audio uninterrupted
     overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + broll_duration})':eof_action=pass"

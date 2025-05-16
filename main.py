@@ -184,46 +184,67 @@ def overlay_broll():
         "broll_duration": broll_duration,
         "output": f"/{output_path}"
     })
-@app.route("/overlay-demo", methods=["POST"])
-def overlay_demo():
+
+@app.route("/process-chunk", methods=["POST"])
+def process_chunk():
+    data = request.get_json()
+    main_url = data.get("main_video_url")
+    broll_url = data.get("broll_url")
+    start_time = int(data.get("start_time", 0))  # in seconds
+    duration = 30  # max chunk duration
+
     video_id = str(uuid.uuid4())
-
-    # URLs for demo
-    main_url = "https://drive.google.com/uc?export=download&id=196U7pFdsDoq8F5emI5IaqWH0GZVPmzKc"
-    broll_url = "https://drive.google.com/uc?export=download&id=1Y-drF_mO9vtrKtxVkz-JLXOp6A3LL8sU"
-
-    # Paths
-    main_path = f"temp/{video_id}_main.mp4"
+    raw_main = f"temp/{video_id}_raw.mp4"
+    chunk_main = f"temp/{video_id}_chunk.mp4"
+    norm_main = f"temp/{video_id}_norm.mp4"
     broll_path = f"temp/{video_id}_broll.mp4"
-    norm_main = f"temp/{video_id}_main_norm.mp4"
-    norm_broll = f"temp/{video_id}_broll_norm.mp4"
     trimmed_broll = f"temp/{video_id}_broll_trimmed.mp4"
-    output_path = f"temp/{video_id}_overlay_output.mp4"
+    audio_path = f"temp/{video_id}_audio.mp3"
+    output_path = f"temp/{video_id}_output.mp4"
 
-    # Download
-    download_video(main_url, main_path)
-    download_video(broll_url, broll_path)
+    # Step 1: Download full main video
+    download_video(main_url, raw_main)
 
-    # Normalize
-    subprocess.run(f"ffmpeg -y -i {main_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_main}", shell=True)
-    subprocess.run(f"ffmpeg -y -i {broll_path} -vf scale=1280:720 -r 30 -c:v libx264 -c:a aac {norm_broll}", shell=True)
-
-    # Trim & reset B-roll timestamps
+    # Step 2: Extract 30s chunk
     subprocess.run(
-        f"ffmpeg -y -i {norm_broll} -t 5 -vf scale=1280:720,setpts=PTS-STARTPTS -r 30 -c:v libx264 {trimmed_broll}",
+        f"ffmpeg -y -ss {start_time} -t {duration} -i {raw_main} -c copy {chunk_main}",
         shell=True
     )
 
-    # Overlay B-roll from 5s to 10s
+    # Step 3: Normalize chunk
     subprocess.run(
-        f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"[0:v][1:v] overlay=enable='between(t,5,10)':eof_action=pass\" -map 0:a -c:v libx264 -c:a aac {output_path}",
+        f"ffmpeg -y -i {chunk_main} -vf scale=480:270 -r 20 -c:v libx264 -c:a aac {norm_main}",
+        shell=True
+    )
+
+    # Step 4: Download B-roll and trim
+    download_video(broll_url, broll_path)
+    subprocess.run(
+        f"ffmpeg -y -i {broll_path} -t 5 -vf scale=480:270,setpts=PTS-STARTPTS -r 20 -c:v libx264 -preset veryfast {trimmed_broll}",
+        shell=True
+    )
+
+    # Step 5: Transcribe audio + get timestamp from GPT
+    subprocess.run(f"ffmpeg -y -i {norm_main} -vn -acodec libmp3lame {audio_path}", shell=True)
+    transcript = transcribe_audio(audio_path)
+    timestamp = get_broll_timestamp(transcript)
+    if timestamp > duration - 5:
+        timestamp = 0  # fallback to start if out of bounds
+
+    # Step 6: Overlay B-roll at GPT-selected time
+    overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + 5})':eof_action=pass"
+    subprocess.run(
+        f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -c:v libx264 -c:a aac {output_path}",
         shell=True
     )
 
     return jsonify({
-        "status": "demo complete",
+        "status": "processed",
+        "chunk_start": start_time,
+        "broll_timestamp": timestamp,
         "output": f"/{output_path}"
     })
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

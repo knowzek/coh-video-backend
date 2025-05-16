@@ -235,11 +235,9 @@ def process_chunk():
 
     # Step 6: Overlay B-roll at GPT-selected time
     overlay_filter = "[0:v][1:v] overlay=0:0"
-subprocess.run(
-    f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -shortest -c:v libx264 -c:a aac {output_path}",
+    subprocess.run(f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -shortest -c:v libx264 -c:a aac {output_path}",
     shell=True
 )
-
 
     return jsonify({
         "status": "processed",

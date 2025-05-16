@@ -227,9 +227,11 @@ def process_chunk():
     # Step 5: Transcribe audio + get timestamp from GPT
     subprocess.run(f"ffmpeg -y -i {norm_main} -vn -acodec libmp3lame {audio_path}", shell=True)
     transcript = transcribe_audio(audio_path)
-    timestamp = get_broll_timestamp(transcript)
-    if timestamp > duration - 5:
-        timestamp = 0  # fallback to start if out of bounds
+    timestamp = 5  # Force overlay to appear at 5 seconds
+    print(f"[DEBUG] Hardcoded B-roll timestamp to 5s for test.")
+    if timestamp < 0 or timestamp > (duration - 5):
+        print(f"[WARN] GPT gave out-of-bounds timestamp: {timestamp}. Clamping to 0.")
+        timestamp = 0
 
     # Step 6: Overlay B-roll at GPT-selected time
     overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + 5})':eof_action=pass"
@@ -244,7 +246,8 @@ def process_chunk():
         "broll_timestamp": timestamp,
         "output": f"/{output_path}"
     })
-
+    
+print(f"[DEBUG] Overlay complete: B-roll inserted at {timestamp}s")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

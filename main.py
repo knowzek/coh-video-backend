@@ -246,8 +246,6 @@ def process_chunk():
         "broll_timestamp": timestamp,
         "output": f"/{output_path}"
     })
-    
-print(f"[DEBUG] Overlay complete: B-roll inserted at {timestamp}s")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

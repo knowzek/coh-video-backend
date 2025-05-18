@@ -297,6 +297,10 @@ def test_overlay():
         "status": "test-complete",
         "output": f"/{output_path}"
     })
+@app.route("/test")
+def test():
+    return "Server is up!", 200
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 

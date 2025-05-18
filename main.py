@@ -172,7 +172,7 @@ def overlay_broll():
 
 
     # Step 6: Overlay B-roll visually with main audio uninterrupted
-    overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + broll_duration})':eof_action=pass"
+    overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + 5})':eof_action=stop,format=auto"
     subprocess.run(
         f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -c:v libx264 -c:a aac {output_path}",
         shell=True

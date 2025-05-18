@@ -251,7 +251,52 @@ def process_chunk():
         "broll_timestamp": timestamp,
         "output": f"/{output_path}"
     })
+    
+@app.route("/test-overlay", methods=["POST"])
+def test_overlay():
+    video_id = str(uuid.uuid4())
+    main_url = "https://drive.google.com/uc?export=download&id=196U7pFdsDoq8F5emI5IaqWH0GZVPmzKc"
+    broll_url = "https://drive.google.com/uc?export=download&id=1Y-drF_mO9vtrKtxVkz-JLXOp6A3LL8sU"
 
+    # Download
+    main_path = f"temp/{video_id}_main.mp4"
+    broll_path = f"temp/{video_id}_broll.mp4"
+    output_path = f"temp/{video_id}_output.mp4"
+
+    download_video(main_url, main_path)
+    download_video(broll_url, broll_path)
+
+    # Normalize both to same resolution, same FPS
+    norm_main = f"temp/{video_id}_main_norm.mp4"
+    norm_broll = f"temp/{video_id}_broll_norm.mp4"
+
+    subprocess.run(
+        f"ffmpeg -y -i {main_path} -vf scale=640:360 -r 24 -c:v libx264 -preset veryfast -c:a aac {norm_main}",
+        shell=True
+    )
+    subprocess.run(
+        f"ffmpeg -y -i {broll_path} -vf scale=640:360 -r 24 -t 5 -c:v libx264 -preset veryfast -an {norm_broll}",
+        shell=True
+    )
+
+    # Final overlay — hardcoded between 5s and 10s
+    overlay_filter = (
+        "[0:v]setpts=PTS-STARTPTS[base];"
+        "[1:v]setpts=PTS-STARTPTS[broll];"
+        "[base][broll]overlay=enable='between(t,5,10)':eof_action=stop[v]"
+    )
+
+    subprocess.run(
+        f'ffmpeg -y -i {norm_main} -i {norm_broll} '
+        f'-filter_complex "{overlay_filter}" '
+        f'-map "[v]" -map 0:a -c:v libx264 -c:a aac -shortest {output_path}',
+        shell=True
+    )
+
+    return jsonify({
+        "status": "test-complete",
+        "output": f"/{output_path}"
+    })
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 

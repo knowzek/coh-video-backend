@@ -234,7 +234,10 @@ def process_chunk():
         timestamp = 0
 
     # Step 6: Overlay B-roll at GPT-selected time
-    overlay_filter = f"[0:v][1:v] overlay=enable='between(t,{timestamp},{timestamp + 5})':eof_action=stop,format=auto"
+    overlay_filter = (
+    f"[1:v]setpts=PTS-STARTPTS[vb];"
+    f"[0:v][vb]overlay=enable='between(t,{timestamp},{timestamp + 5})':eof_action=stop:shortest=1"
+)
     subprocess.run(f"ffmpeg -y -i {norm_main} -i {trimmed_broll} -filter_complex \"{overlay_filter}\" -map 0:a -shortest -c:v libx264 -c:a aac {output_path}",
     shell=True
 )

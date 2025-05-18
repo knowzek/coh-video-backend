@@ -238,11 +238,10 @@ def process_chunk():
         f"[1:v]setpts=PTS-STARTPTS[vb];"
         f"[0:v][vb]overlay=enable='between(t,{timestamp},{timestamp + 5})':eof_action=stop[v]"
     )
-
     subprocess.run(
         f'ffmpeg -y -i {norm_main} -i {trimmed_broll} '
         f'-filter_complex "{overlay_filter}" '
-        f'-map "[v]" -map 0:a -vsync 2 -c:v libx264 -c:a aac -shortest {output_path}',
+        f'-map "[v]" -map 0:a -c:v libx264 -c:a aac -shortest {output_path}',
         shell=True
     )
     return jsonify({
